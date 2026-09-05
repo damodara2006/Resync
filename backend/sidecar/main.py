@@ -32,6 +32,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from sidecar import wal_db
 from sidecar.config import get_sidecar_settings
@@ -57,6 +58,17 @@ app = FastAPI(
     ),
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# The WAL Sidecar frontend page (frontend/src/pages/WalSidecarPage.jsx) talks
+# to this process directly from the browser -- separate from the main
+# backend's own CORS setup, since this is a fully independent process.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
