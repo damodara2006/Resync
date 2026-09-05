@@ -26,16 +26,19 @@ would be.
 from __future__ import annotations
 
 import json
-import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
 
 from sidecar import wal_db
+from sidecar.config import get_sidecar_settings
+from sidecar.healing_agent import run_wal_healing
+from sidecar.mongo import audit_logs_collection
 
-RAZORPAY_UPSTREAM = os.environ.get("RAZORPAY_UPSTREAM_URL", "https://api.razorpay.com")
+RAZORPAY_UPSTREAM = get_sidecar_settings().razorpay_upstream_url
 
 
 @asynccontextmanager
@@ -97,6 +100,46 @@ async def health() -> dict[str, str]:
 @app.get("/wal/entries")
 async def list_wal_entries(limit: int = 200) -> list[dict[str, Any]]:
     return wal_db.all_entries(limit=limit)
+
+
+@app.post("/wal/heal")
+async def heal_from_wal() -> dict[str, Any]:
+    """Approach B's self-healing trigger: scan the local WAL for payments
+    Razorpay confirmed captured that MongoDB has ZERO record of at all,
+    verify them with Groq, and reconstruct the missing order if the
+    safety gate passes. Fully independent of Approach A's reconciliation
+    agent in the main backend."""
+    return await run_wal_healing()
+
+
+@app.get("/wal/orphans")
+async def list_current_orphans() -> list[dict[str, Any]]:
+    """Preview which WAL-witnessed payments currently have no MongoDB
+    order at all, without triggering healing."""
+    from sidecar.healing_agent import scan_wal_for_orphans
+
+    orphans = await scan_wal_for_orphans()
+    return [
+        {
+            "order_id": o.get("order_id"),
+            "razorpay_order_id": o.get("razorpay_order_id"),
+            "razorpay_payment_id": o.get("razorpay_payment_id"),
+            "amount_inr": o.get("amount_inr"),
+        }
+        for o in orphans
+    ]
+
+
+@app.get("/wal/audit-logs")
+async def wal_audit_logs(limit: int = 200) -> list[dict[str, Any]]:
+    """Audit trail written by this sidecar's own healing agent."""
+    cursor = audit_logs_collection().find({"source": "wal_sidecar"}).sort("timestamp", -1)
+    docs = await cursor.to_list(length=limit)
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+        if isinstance(doc.get("timestamp"), datetime):
+            doc["timestamp"] = doc["timestamp"].isoformat()
+    return docs
 
 
 @app.api_route(
