@@ -18,26 +18,27 @@ import {
   triggerWalHeal,
 } from "../api/walClient";
 import WalAuditTimeline from "../components/WalAuditTimeline";
+import { PageContainer, PageHeader, Section } from "../components/PageShell";
 
 const PRODUCT_AMOUNT = 499;
 
 function SidecarStatusBadge({ status }) {
   if (status === "checking") {
     return (
-      <span className="flex items-center gap-1.5 rounded-full border border-gray-600 bg-gray-500/10 px-3 py-1 text-xs text-gray-400">
+      <span className="flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
         <Loader2 size={12} className="animate-spin" /> Checking sidecar…
       </span>
     );
   }
   if (status === "online") {
     return (
-      <span className="flex items-center gap-1.5 rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-xs text-green-300">
+      <span className="flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
         <Radio size={12} /> Sidecar online
       </span>
     );
   }
   return (
-    <span className="flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs text-red-300">
+    <span className="flex items-center gap-1.5 rounded-full border border-red-300 bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
       <AlertOctagon size={12} /> Sidecar unreachable
     </span>
   );
@@ -156,191 +157,186 @@ export default function WalSidecarPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-10">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold text-white">
-              Local Sidecar WAL &amp; Self-Healing Agent
-            </h1>
-            <SidecarStatusBadge status={sidecarStatus} />
-          </div>
-          <p className="mt-1 text-sm text-gray-400">
-            Approach B: a fully independent process (
-            <code className="text-emerald-400">backend/sidecar/</code>) that durably witnesses
-            Razorpay traffic on the wire, so it can reconstruct orders MongoDB never recorded at
-            all -- not even <code className="text-gray-300">PENDING</code>.
-          </p>
-        </div>
-      </div>
-
-      {sidecarStatus === "offline" && (
-        <div className="mb-6 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          <AlertOctagon size={16} />
-          WAL sidecar unreachable. Run it separately:{" "}
-          <code className="text-red-200">uvicorn sidecar.main:app --port 9000</code> from the{" "}
-          <code className="text-red-200">backend/</code> directory.
-        </div>
-      )}
-
-      <section className="mb-10 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6">
-        <div className="mb-4 flex items-center gap-2 text-emerald-400">
-          <Skull size={20} />
-          <span className="text-sm font-medium uppercase tracking-wide">
-            Crash Simulator -- Zero DB Footprint
-          </span>
-        </div>
-        <p className="mb-4 text-sm text-gray-400">
-          This checkout calls a special endpoint that creates a real Razorpay order (relayed
-          through the WAL sidecar) but <strong className="text-gray-200">never writes anything
-          to MongoDB</strong> -- no order row, not even PENDING. After payment, no verification
-          call happens either, modeling a server that crashed before it could process the
-          response at all.
-        </p>
-
-        <label className="mb-4 block max-w-sm text-sm text-gray-400">
-          Customer email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white outline-none focus:border-emerald-500"
-          />
-        </label>
-
-        <button
-          onClick={handleSimulateZeroDbCrash}
-          disabled={crashing}
-          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
-        >
-          {crashing ? (
-            <>
-              <Loader2 size={18} className="animate-spin" /> Processing…
-            </>
-          ) : (
-            <>
-              <Skull size={18} /> Simulate Mid-Flight Server Crash &amp; Zero-DB Loss (₹
-              {PRODUCT_AMOUNT})
-            </>
-          )}
-        </button>
-
-        {crashResult && (
-          <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
-            <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
-            {crashResult}
-          </div>
-        )}
-        {crashError && (
-          <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-3 text-sm text-red-300">
-            <AlertOctagon size={18} className="mt-0.5 shrink-0" />
-            {crashError}
-          </div>
-        )}
-      </section>
-
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="text-lg font-medium text-white">Self-Healing Control</h2>
-        <button
-          onClick={handleTriggerHeal}
-          disabled={healing}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-500 disabled:opacity-60"
-        >
-          {healing ? (
-            <>
-              <Loader2 size={18} className="animate-spin" /> Healing…
-            </>
-          ) : (
-            <>
-              <DatabaseZap size={18} /> Trigger Local WAL Self-Heal
-            </>
-          )}
-        </button>
-      </div>
-
-      {healResult && (
-        <div className="mb-6 flex flex-wrap items-center gap-4 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-200">
-          <CheckCircle2 size={16} />
-          Heal run complete: {healResult.orphans_found} zero-footprint orphan(s) found,{" "}
-          {healResult.healed_via_wal} reconstructed from WAL, {healResult.escalated} escalated.
-        </div>
-      )}
-      {healError && (
-        <div className="mb-6 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          <AlertOctagon size={16} />
-          {healError}
-        </div>
-      )}
-
-      <section className="mb-10 grid gap-6 md:grid-cols-2">
-        <div>
-          <h2 className="mb-3 text-lg font-medium text-white">
-            Current Zero-Footprint Orphans ({orphans.length})
-          </h2>
-          {loadingData ? (
-            <div className="py-6 text-center text-sm text-gray-500">Loading…</div>
-          ) : orphans.length === 0 ? (
-            <div className="rounded-xl border border-white/10 bg-white/5 py-6 text-center text-sm text-gray-500">
-              None found. MongoDB has a record for every WAL-witnessed payment.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {orphans.map((o) => (
-                <div
-                  key={o.razorpay_payment_id || o.razorpay_order_id}
-                  className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-3 text-sm"
-                >
-                  <div className="font-mono text-xs text-orange-200">
-                    {o.razorpay_order_id} / {o.razorpay_payment_id}
-                  </div>
-                  <div className="text-orange-300">
-                    order_id: {o.order_id || "unknown"} · ₹{(o.amount_inr ?? 0).toFixed(2)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h2 className="mb-3 flex items-center gap-2 text-lg font-medium text-white">
-            <ScanLine size={18} /> Raw WAL Entries ({walEntries.length})
-          </h2>
-          <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-3">
-            {loadingData ? (
-              <div className="py-6 text-center text-sm text-gray-500">Loading…</div>
-            ) : walEntries.length === 0 ? (
-              <div className="py-6 text-center text-sm text-gray-500">
-                No traffic witnessed yet.
-              </div>
+    <>
+      <PageHeader
+        title="Local WAL & Self-Healing Agent"
+        status={<SidecarStatusBadge status={sidecarStatus} />}
+        description={
+          <>
+            A local Write-Ahead Log durably witnesses Razorpay traffic on the wire, so it can
+            reconstruct orders MongoDB never recorded at all — not even{" "}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-slate-700">PENDING</code>.
+          </>
+        }
+        actions={
+          <button
+            onClick={handleTriggerHeal}
+            disabled={healing}
+            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {healing ? (
+              <>
+                <Loader2 size={16} className="animate-spin" /> Healing…
+              </>
             ) : (
-              walEntries.map((e) => (
-                <div key={e.id} className="rounded-lg bg-black/30 p-2 text-xs">
-                  <span
-                    className={`mr-2 rounded px-1.5 py-0.5 ${
-                      e.direction === "request"
-                        ? "bg-blue-500/20 text-blue-300"
-                        : "bg-purple-500/20 text-purple-300"
-                    }`}
-                  >
-                    {e.direction}
-                  </span>
-                  <span className="text-gray-400">{e.razorpay_path}</span>
-                  <div className="mt-1 text-gray-500">
-                    order_id={e.order_id || "-"} rzp_order={e.razorpay_order_id || "-"} rzp_payment=
-                    {e.razorpay_payment_id || "-"}
-                  </div>
-                </div>
-              ))
+              <>
+                <DatabaseZap size={16} /> Trigger self-heal
+              </>
+            )}
+          </button>
+        }
+      />
+
+      <PageContainer className="space-y-8">
+        {sidecarStatus === "offline" && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertOctagon size={16} className="shrink-0" />
+            WAL sidecar unreachable. Run it separately:{" "}
+            <code className="rounded bg-red-100 px-1 py-0.5 text-red-800">
+              uvicorn sidecar.main:app --port 9000
+            </code>{" "}
+            from the <code className="rounded bg-red-100 px-1 py-0.5 text-red-800">backend/</code>{" "}
+            directory.
+          </div>
+        )}
+
+        {(healResult || healError) && (
+          <div>
+            {healResult && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+                <CheckCircle2 size={16} className="shrink-0" />
+                Heal run complete: {healResult.orphans_found} zero-footprint orphan(s) found,{" "}
+                {healResult.healed_via_wal} reconstructed from WAL, {healResult.escalated}{" "}
+                escalated.
+              </div>
+            )}
+            {healError && (
+              <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <AlertOctagon size={16} className="shrink-0" />
+                {healError}
+              </div>
             )}
           </div>
-        </div>
-      </section>
+        )}
 
-      <section>
-        <h2 className="mb-3 text-lg font-medium text-white">WAL Healing Audit Timeline</h2>
-        <WalAuditTimeline auditLogs={auditLogs} loading={loadingData} />
-      </section>
-    </div>
+        <Section
+          tone="accent"
+          icon={Skull}
+          title="Crash simulator — zero DB footprint"
+          description="Creates a real Razorpay order relayed through the WAL sidecar, then deliberately skips every database write to model a server that crashes mid-flight."
+        >
+          <p className="mb-5 max-w-3xl text-sm leading-relaxed text-slate-600">
+            After payment, no verification call happens either.{" "}
+            <strong className="text-slate-900">MongoDB ends up with zero record</strong> of the
+            order — not even a PENDING row. Only the WAL sidecar's independent log has a trace of
+            it.
+          </p>
+
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="block w-full max-w-xs text-sm font-medium text-slate-700">
+              Customer email
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <button
+              onClick={handleSimulateZeroDbCrash}
+              disabled={crashing}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {crashing ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" /> Processing…
+                </>
+              ) : (
+                <>
+                  <Skull size={18} /> Simulate crash (₹{PRODUCT_AMOUNT})
+                </>
+              )}
+            </button>
+          </div>
+
+          {crashResult && (
+            <div className="mt-5 flex items-start gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-3 text-sm text-emerald-800">
+              <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+              {crashResult}
+            </div>
+          )}
+          {crashError && (
+            <div className="mt-5 flex items-start gap-2 rounded-lg border border-red-200 bg-white px-3 py-3 text-sm text-red-700">
+              <AlertOctagon size={18} className="mt-0.5 shrink-0" />
+              {crashError}
+            </div>
+          )}
+        </Section>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <Section title={`Zero-footprint orphans (${orphans.length})`}>
+            {loadingData ? (
+              <div className="py-6 text-center text-sm text-slate-500">Loading…</div>
+            ) : orphans.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                None found. MongoDB has a record for every WAL-witnessed payment.
+              </div>
+            ) : (
+              <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                {orphans.map((o) => (
+                  <div
+                    key={o.razorpay_payment_id || o.razorpay_order_id}
+                    className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm"
+                  >
+                    <div className="font-mono text-xs text-orange-800">
+                      {o.razorpay_order_id} / {o.razorpay_payment_id}
+                    </div>
+                    <div className="mt-0.5 text-orange-700">
+                      order_id: {o.order_id || "unknown"} · ₹{(o.amount_inr ?? 0).toFixed(2)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+
+          <Section icon={ScanLine} title={`Raw WAL entries (${walEntries.length})`}>
+            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+              {loadingData ? (
+                <div className="py-6 text-center text-sm text-slate-500">Loading…</div>
+              ) : walEntries.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                  No traffic witnessed yet.
+                </div>
+              ) : (
+                walEntries.map((e) => (
+                  <div key={e.id} className="rounded-lg bg-slate-50 p-2.5 text-xs">
+                    <span
+                      className={`mr-2 rounded px-1.5 py-0.5 font-medium ${
+                        e.direction === "request"
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-purple-100 text-purple-700"
+                      }`}
+                    >
+                      {e.direction}
+                    </span>
+                    <span className="text-slate-500">{e.razorpay_path}</span>
+                    <div className="mt-1 text-slate-400">
+                      order_id={e.order_id || "-"} rzp_order={e.razorpay_order_id || "-"}{" "}
+                      rzp_payment={e.razorpay_payment_id || "-"}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </Section>
+        </div>
+
+        <Section title="WAL healing audit timeline">
+          <WalAuditTimeline auditLogs={auditLogs} loading={loadingData} />
+        </Section>
+      </PageContainer>
+    </>
   );
 }

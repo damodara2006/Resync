@@ -1,40 +1,32 @@
 """
-Approach B: the WAL Sidecar's self-healing agent.
+Self-healing agent for zero-DB-footprint orphaned payments.
 
-This solves the harder "Zero-DB-Footprint Orphaned Payment" case: the
-merchant's server crashed so early that NOT EVEN a PENDING order row was
-ever written to MongoDB. Approach A (backend/agent/reconciliation.py) has
-no way to safety-check an order it has zero local record of, so it can
-only escalate to a human in that situation.
+A payment can be captured on Razorpay while the local backend crashes
+before writing anything to MongoDB -- not even a PENDING row. This agent
+detects and heals that case using a source of evidence that does not
+depend on the backend's own database writes surviving the crash: the
+local Write-Ahead Log, which durably records every Razorpay request and
+response before the network call is even made (see main.py's proxy and
+razorpay_client.py).
 
-This agent closes that gap using a completely independent detection
-mechanism: the local WAL this sidecar already captured, purely by having
-sat in the middle of the Resync -> Razorpay conversation. It never reads
-Resync's own database writes or crash logs -- everything it needs (the
-internal order_id, the Razorpay order/payment ids, the amount, the
-customer email) was already witnessed directly off the wire.
+Pipeline (LangGraph state machine, four stages):
 
-Pipeline (LangGraph state machine, four stages -- mirroring Approach A's
-shape so the two are easy to compare side by side, but fully independent
-in implementation):
-
-  1. scan_wal_for_orphans   - find WAL entries whose Razorpay payment was
-                              captured, but MongoDB has zero order record
-                              at all (not PENDING, not anything -- absent).
-  2. groq_identity_check    - ask Groq to cross-check the WAL's own
-                              request-side and response-side records
-                              agree with each other (same email/amount
-                              reported at both ends of the same
-                              transaction), and to explain its reasoning.
-  3. safety_gate            - amount ceiling + Groq confidence threshold.
-                              (No local order to check email against --
-                              there never was one -- so this gate instead
-                              verifies internal WAL self-consistency.)
-  4. reconstruct_and_audit  - if the gate passes, INSERT (not update) a
-                              brand new order document directly into
-                              MongoDB with status FULFILLED_VIA_LOCAL_WAL,
-                              and write the full reasoning trail to
-                              AuditLog.
+  1. scan_wal_for_orphans   - independently ask Razorpay which payments it
+                              has captured, then find the ones MongoDB has
+                              zero order record for at all (not PENDING,
+                              not anything -- absent).
+  2. groq_identity_check    - ask Groq to assess whether the captured WAL
+                              record looks complete and trustworthy enough
+                              to reconstruct an order from, and to recover
+                              the customer's email.
+  3. safety_gate            - amount ceiling, Groq confidence threshold,
+                              and deterministic (non-LLM) checks that the
+                              WAL's own request/response amounts and
+                              identifiers are internally consistent.
+  4. reconstruct_and_audit  - if the gate passes, insert a new order
+                              document into MongoDB with status
+                              FULFILLED_VIA_LOCAL_WAL, and write the full
+                              reasoning trail to the audit log.
 """
 from __future__ import annotations
 
@@ -51,9 +43,10 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, EmailStr, Field
 
-from sidecar import wal_db
-from sidecar.config import get_sidecar_settings
-from sidecar.mongo import audit_logs_collection, orders_collection
+import  wal_db
+from config import get_settings
+from mongo import audit_logs_collection, orders_collection
+from razorpay_client import fetch_and_log_recent_captured_payments
 
 
 def new_id(prefix: str) -> str:
@@ -121,7 +114,7 @@ def _check_wal_consistency(
 
 
 def _get_identity_check_chain():
-    settings = get_sidecar_settings()
+    settings = get_settings()
     llm = ChatGroq(model=settings.groq_model_name, api_key=settings.groq_api_key, temperature=0)
     return _IDENTITY_CHECK_PROMPT | llm.with_structured_output(WalIdentityCheckResult)
 
@@ -157,9 +150,19 @@ class HealingState(TypedDict, total=False):
 async def scan_wal_for_orphans() -> list[HealingState]:
     """Find WAL-witnessed payments that MongoDB has NO order record for at all.
 
-    This is the harder case than Approach A's anomaly detection: here the
-    local order document does not exist -- not PENDING, not anything.
+    The local order document does not exist -- not PENDING, not anything --
+    because the merchant backend crashed before it could write one.
+
+    Before scanning, this independently asks Razorpay directly which
+    payments it has actually captured recently, and logs each one to the
+    WAL as it goes (see razorpay_client.fetch_and_log_recent_captured_payments).
+    That call is what actually confirms "this specific payment is
+    captured" -- the proxy alone only sees whatever outbound requests the
+    backend happened to make, which is nothing at all if it crashed
+    before making any of them.
     """
+    fetch_and_log_recent_captured_payments(hours=24)
+
     entries = wal_db.all_entries(limit=500)
 
     # Group WAL rows by razorpay_order_id so we can pair up the
@@ -202,6 +205,20 @@ async def scan_wal_for_orphans() -> list[HealingState]:
         if existing_order is not None:
             continue  # MongoDB already has a record -- not a zero-footprint case.
 
+        # Skip payments this healing agent has already reviewed at least
+        # once -- without this, escalating a payment on one run (e.g. low
+        # confidence) means it gets re-scanned and re-audited on every
+        # subsequent run too, since a failed/escalated attempt doesn't
+        # create an order and so never satisfies the existing_order check
+        # above. That duplicated the audit trail and could even produce
+        # contradictory outcomes (escalated once, healed on a later run)
+        # for the exact same payment.
+        already_audited = await audit_logs_collection().find_one(
+            {"razorpay_payment_id": payment_response.get("razorpay_payment_id")}
+        )
+        if already_audited is not None:
+            continue
+
         request_entry = sides["request"][0] if sides["request"] else None
 
         orphans.append(
@@ -215,9 +232,9 @@ async def scan_wal_for_orphans() -> list[HealingState]:
                 reasoning_steps=[
                     f"Zero-DB-footprint anomaly: Razorpay order {rzp_order_id} / payment "
                     f"{payment_response.get('razorpay_payment_id')} was witnessed captured "
-                    f"directly in the WAL sidecar's traffic log, but MongoDB has NO order "
-                    f"record at all (not PENDING, not anything) -- the merchant backend "
-                    f"likely crashed before writing any row."
+                    f"directly in the local Write-Ahead Log, but MongoDB has NO order record "
+                    f"at all (not PENDING, not anything) -- the backend likely crashed "
+                    f"before writing any row."
                 ],
             )
         )
@@ -321,7 +338,7 @@ async def groq_identity_check_node(state: HealingState) -> HealingState:
 # --------------------------------------------------------------------------
 
 async def safety_gate_node(state: HealingState) -> HealingState:
-    settings = get_sidecar_settings()
+    settings = get_settings()
     identity_check = state.get("identity_check")
     amount_inr = state.get("amount_inr") or 0.0
 

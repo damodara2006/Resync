@@ -1,8 +1,7 @@
 import axios from "axios";
 
-// Approach B is a fully independent process from the main Resync backend --
-// see backend/sidecar/. This client talks directly to that sidecar (default
-// port 9000), never through the main backend's API base URL.
+// WAL proxy/healing endpoints -- same backend process and port as
+// client.js's checkout endpoints, kept in a separate file for organization.
 const WAL_SIDECAR_URL = import.meta.env.VITE_WAL_SIDECAR_URL || "http://localhost:9000";
 
 export const walClient = axios.create({

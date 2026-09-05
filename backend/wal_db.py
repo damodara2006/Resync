@@ -1,14 +1,11 @@
 """
-Local Write-Ahead Log (WAL) storage for the WAL sidecar.
+Local Write-Ahead Log (WAL) storage.
 
-This is a plain SQLite file living on the same machine as the sidecar
-process. It is intentionally simple and synchronous: every write here is
-committed to disk before the sidecar does anything else (like forwarding
-the request onward to Razorpay), so the record survives even if the main
-Resync backend process crashes immediately after this point.
-
-This module has ZERO dependency on the main backend app -- the sidecar is
-a fully standalone process, run and deployed independently.
+A plain SQLite file living on the same machine as this process. It is
+intentionally simple and synchronous: every write here is committed to
+disk before this process does anything else (like forwarding a request
+onward to Razorpay), so the record survives even if the process crashes
+immediately after this point.
 """
 from __future__ import annotations
 
@@ -70,11 +67,11 @@ def record_entry(
 ) -> int:
     """Durably write one intercepted request/response to the local WAL.
 
-    This is called BEFORE the sidecar forwards the request onward to the
-    real Razorpay API (for `direction="request"`) and again as soon as
+    This is called BEFORE the request is forwarded onward to the real
+    Razorpay API (for `direction="request"`) and again as soon as
     Razorpay's reply is received (for `direction="response"`), so the
-    record exists independent of whether the caller (Resync's backend)
-    is still alive to receive it.
+    record exists independent of whether this process is still alive to
+    finish handling it.
     """
     with _connect() as conn:
         cursor = conn.execute(
