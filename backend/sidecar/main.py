@@ -104,6 +104,19 @@ def _extract_order_fields(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
+def _extract_payment_items(path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """`GET /v1/payments` (payment.all(), used by the healing scan) returns
+    a collection `{"entity": "collection", "items": [...]}`, not a single
+    payment object -- _extract_order_fields alone finds nothing useful in
+    that shape, since a collection has no top-level id/order_id. This pulls
+    per-payment fields out of each item so every captured payment the scan
+    happens to see gets its own durable WAL record, exactly as if it had
+    been witnessed individually."""
+    if "/payments" not in path or not isinstance(payload.get("items"), list):
+        return []
+    return [_extract_order_fields(path, item) for item in payload["items"]]
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "upstream": RAZORPAY_UPSTREAM}
@@ -216,6 +229,26 @@ async def proxy(full_path: str, request: Request) -> Response:
         raw_payload=response_payload,
         **merged_fields,
     )
+
+    # payment.all() (used by the healing scan) returns a collection of
+    # payments in one response -- log each one as its own WAL entry so
+    # scan_wal_for_orphans() can see which specific payments Razorpay has
+    # actually captured, not just that a scan happened.
+    for item_fields in _extract_payment_items(request_path, response_payload):
+        if item_fields.get("razorpay_payment_id"):
+            wal_db.record_entry(
+                direction="response",
+                razorpay_path=f"{request_path}/{item_fields['razorpay_payment_id']}",
+                raw_payload=next(
+                    (
+                        item
+                        for item in response_payload.get("items", [])
+                        if item.get("id") == item_fields["razorpay_payment_id"]
+                    ),
+                    {},
+                ),
+                **item_fields,
+            )
 
     return Response(
         content=upstream_response.content,

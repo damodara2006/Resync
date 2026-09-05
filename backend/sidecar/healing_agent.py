@@ -223,12 +223,21 @@ async def groq_identity_check_node(state: HealingState) -> HealingState:
         return state
 
     chain = _get_identity_check_chain()
-    result: WalIdentityCheckResult = await chain.ainvoke(
-        {
-            "request_payload": (request_entry or {}).get("raw_payload", "{}"),
-            "response_payload": response_entry.get("raw_payload", "{}"),
-        }
-    )
+    try:
+        result: WalIdentityCheckResult = await chain.ainvoke(
+            {
+                "request_payload": (request_entry or {}).get("raw_payload", "{}"),
+                "response_payload": response_entry.get("raw_payload", "{}"),
+            }
+        )
+    except Exception as exc:  # Groq tool-call/schema failures, rate limits, etc.
+        state["identity_check"] = None
+        state["reasoning_steps"].append(
+            f"Groq WAL identity check FAILED to produce a valid result ({exc.__class__.__name__}) "
+            "-- treating as unverifiable rather than guessing; this orphan will be escalated."
+        )
+        return state
+
     state["identity_check"] = result
 
     state["reasoning_steps"].append(
@@ -378,7 +387,14 @@ async def run_wal_healing() -> dict[str, Any]:
     audit_log_ids: list[str] = []
 
     for orphan_state in orphans:
-        final_state = await graph.ainvoke(orphan_state)
+        try:
+            final_state = await graph.ainvoke(orphan_state)
+        except Exception:
+            # One orphan failing (Groq hiccup, transient Mongo error, etc.)
+            # should not take down the whole batch -- count it as escalated
+            # and move on to the rest.
+            escalated += 1
+            continue
         if final_state.get("action_taken") == "AUTO_FULFILL_VIA_WAL":
             healed += 1
         else:
