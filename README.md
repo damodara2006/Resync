@@ -1,25 +1,27 @@
-Resync
+# Resync
 
-Razorpay AI Builder Internship 2026 — AI Revenue Recovery
+**Razorpay AI Builder Internship 2026 — AI Revenue Recovery**
 
-Problem
+## Problem
 
 A payment can be successfully captured by Razorpay while the merchant's backend crashes before the transaction is saved to its own database.
 
 Razorpay knows the payment happened, but the merchant may have lost the local execution state needed to reconstruct the missing order.
 
-Resync recovers that missing state using durable execution evidence captured before the crash.
+**Resync recovers that missing state using durable execution evidence captured before the crash.**
 
-How It Works
+## How It Works
 
+```text
 Merchant Backend
       |
       v
-SQLite WAL
+  SQLite WAL
       |
-      | Record request before Razorpay call
+      | Record request
+      | before Razorpay call
       v
-Razorpay
+   Razorpay
       |
       | Payment captured
       v
@@ -28,12 +30,12 @@ Backend crashes
       v
 Healing Agent
       |
-      +-- Razorpay payment data
-      +-- WAL evidence
-      +-- MongoDB state
+      +---- Razorpay payment data
+      +---- WAL evidence
+      +---- MongoDB state
       |
       v
-Validation + AI assessment
+Validation + AI Assessment
       |
    +--+--+
    |     |
@@ -41,6 +43,8 @@ Validation + AI assessment
    |     |
    v     v
 Recover  Manual Review
+MongoDB
+```
 
 Recovery Process
 
