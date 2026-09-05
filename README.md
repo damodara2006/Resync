@@ -46,7 +46,7 @@ Recover  Manual Review
 MongoDB
 ```
 
-Recovery Process
+## Recovery Process
 
 1. WAL — Records important Razorpay requests and internal order information before the external call.
 2. Detection — Finds captured Razorpay payments without a corresponding MongoDB order.
@@ -55,7 +55,7 @@ Recovery Process
 5. Safety Gate — Recovery only happens when the validation and confidence checks pass.
 6. Audit — Recovery decisions and reasoning are recorded.
 
-Why Resync?
+## Why Resync?
 
 Razorpay's API can tell a merchant that a payment exists.
 
@@ -73,7 +73,7 @@ Resync does not replace Razorpay reconciliation. It provides the missing executi
 
 Demo
 
-The "/wal-sidecar" dashboard demonstrates a crash scenario where:
+## The "/wal-sidecar" dashboard demonstrates a crash scenario where:
 
 - A Razorpay payment succeeds.
 - The merchant database receives no order.
@@ -81,7 +81,7 @@ The "/wal-sidecar" dashboard demonstrates a crash scenario where:
 - The healing agent detects and evaluates the orphaned payment.
 - The missing MongoDB order is reconstructed when the safety checks pass.
 
-Tech Stack
+## Tech Stack
 
 - Backend: FastAPI, Python
 - Database: MongoDB
@@ -90,14 +90,14 @@ Tech Stack
 - Payments: Razorpay
 - Frontend: React, Vite
 
-Repository
+## Repository
 
 backend/    FastAPI, Razorpay, WAL, healing agent
 frontend/   React storefront and recovery dashboard
 
 Run Locally
 
-Backend
+## Backend
 
 cd backend
 python -m venv .venv
@@ -108,7 +108,7 @@ uvicorn main:app --reload --port 9000
 
 Configure Razorpay test keys, Groq API key, and "MONGODB_URI" in ".env".
 
-Frontend
+## Frontend
 
 cd frontend
 npm install
