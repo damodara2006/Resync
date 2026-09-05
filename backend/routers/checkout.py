@@ -57,6 +57,39 @@ async def create_order(payload: CreateOrderRequest) -> CreateOrderResponse:
     )
 
 
+@router.post("/create-order-crash-simulation", response_model=CreateOrderResponse)
+async def create_order_crash_simulation(payload: CreateOrderRequest) -> CreateOrderResponse:
+    """Approach B demo only: creates a real Razorpay order (routed through
+    the WAL sidecar, if WAL_SIDECAR_URL is configured) but DELIBERATELY
+    skips writing anything to MongoDB at all -- not even a PENDING row.
+
+    This reproduces the harder "Zero-DB-Footprint Orphaned Payment" case:
+    after the customer pays, MongoDB has zero record of this order ever
+    existing. The only trace left anywhere is whatever the WAL sidecar
+    independently witnessed while relaying this request to Razorpay.
+
+    Unlike the normal /create-order + /verify flow, there is no
+    corresponding /verify call for this path -- the frontend opens the
+    Razorpay checkout modal directly with this response and never reports
+    the outcome back to this backend, matching a server that crashed
+    before it could process the payment result at all.
+    """
+    settings = get_settings()
+    order_id = new_id("ord")
+
+    rzp_order = rzp_create_order(amount_inr=payload.amount, receipt=order_id)
+
+    # NOTE: deliberately no orders_collection().insert_one(...) here --
+    # that is the entire point of this endpoint.
+
+    return CreateOrderResponse(
+        order_id=order_id,
+        razorpay_order_id=rzp_order["id"],
+        razorpay_key_id=settings.razorpay_key_id,
+        amount=payload.amount,
+    )
+
+
 @router.post("/verify", response_model=VerifyPaymentResponse)
 async def verify_payment(
     payload: VerifyPaymentRequest, simulate_crash: bool = False

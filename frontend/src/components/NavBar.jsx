@@ -1,4 +1,4 @@
-import { LayoutDashboard, ShoppingBag } from "lucide-react";
+import { HardDriveDownload, LayoutDashboard, ShoppingBag } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const linkClass = ({ isActive }) =>
@@ -21,6 +21,10 @@ export default function NavBar() {
           <NavLink to="/admin" className={linkClass}>
             <LayoutDashboard size={16} />
             Admin Dashboard
+          </NavLink>
+          <NavLink to="/wal-sidecar" className={linkClass}>
+            <HardDriveDownload size={16} />
+            WAL Sidecar
           </NavLink>
         </div>
       </div>

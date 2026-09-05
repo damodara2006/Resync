@@ -15,6 +15,14 @@ export async function createOrder({ amount, customerEmail }) {
   return data;
 }
 
+export async function createOrderCrashSimulation({ amount, customerEmail }) {
+  const { data } = await apiClient.post("/api/checkout/create-order-crash-simulation", {
+    amount,
+    customer_email: customerEmail,
+  });
+  return data;
+}
+
 export async function verifyPayment(
   { orderId, razorpayOrderId, razorpayPaymentId, razorpaySignature },
   simulateCrash = false
