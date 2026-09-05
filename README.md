@@ -1,82 +1,112 @@
-# Resync
+Resync
 
-Razorpay AI Builder Internship 2026 — AI Revenue Recovery.
+Razorpay AI Builder Internship 2026 — AI Revenue Recovery
 
-## Problem
+Problem
 
-A payment can be captured on Razorpay while the merchant's backend
-crashes before writing anything to its own database — not even a
-`PENDING` row. The money moves, but the local database has no record the
-checkout ever happened. A reconciliation job that only queries Razorpay's
-API after the fact can recover the payment details, but has no way to
-match a payment back to an internal order if the backend crashed before
-it could tell Razorpay which order this was.
+A payment can be successfully captured by Razorpay while the merchant's backend crashes before the transaction is saved to its own database.
 
-## Approach
+Razorpay knows the payment happened, but the merchant may have lost the local execution state needed to reconstruct the missing order.
 
-A single backend process puts a local Write-Ahead Log in front of every
-Razorpay call:
+Resync recovers that missing state using durable execution evidence captured before the crash.
 
-1. Before each outbound call to Razorpay (create an order, verify a
-   payment), the request is written to a local SQLite WAL. The write
-   lands on disk before the network call happens, so it survives even if
-   the process crashes immediately afterward.
-2. A healing agent independently asks Razorpay which payments it has
-   captured, then checks MongoDB for a matching order. If MongoDB has no
-   record at all, the WAL is the only place the order's identity survives.
-3. Groq (`openai/gpt-oss-120b`) assesses whether the WAL record is
-   complete enough to reconstruct an order from. Amount and identifier
-   consistency are checked deterministically in code, not left to the
-   model.
-4. A safety gate (amount ceiling, WAL consistency, model confidence) must
-   pass before the order is reconstructed in MongoDB. If it fails, the
-   payment is left for manual review instead of being guessed at. Every
-   decision is written to an audit log with its full reasoning.
+How It Works
 
-## Scope
+Merchant Backend
+      |
+      v
+SQLite WAL
+      |
+      | Record request before Razorpay call
+      v
+Razorpay
+      |
+      | Payment captured
+      v
+Backend crashes
+      |
+      v
+Healing Agent
+      |
+      +-- Razorpay payment data
+      +-- WAL evidence
+      +-- MongoDB state
+      |
+      v
+Validation + AI assessment
+      |
+   +--+--+
+   |     |
+ PASS   FAIL
+   |     |
+   v     v
+Recover  Manual Review
 
-This targets the case where the backend crashes before Razorpay has any
-way to know which internal order a payment belongs to. For a crash that
-happens after an order is normally created and recorded, a periodic
-reconciliation job against Razorpay's payments API is simpler and
-sufficient on its own — this project is specifically about the harder
-case where that lookup has nothing to match against.
+Recovery Process
 
-## Repo layout
+1. WAL — Records important Razorpay requests and internal order information before the external call.
+2. Detection — Finds captured Razorpay payments without a corresponding MongoDB order.
+3. Validation — Checks amounts and identifiers deterministically.
+4. AI Assessment — Groq ("openai/gpt-oss-120b") evaluates whether the surviving evidence is sufficient for recovery.
+5. Safety Gate — Recovery only happens when the validation and confidence checks pass.
+6. Audit — Recovery decisions and reasoning are recorded.
 
-```
-backend/    FastAPI app: storefront checkout, the WAL, the healing agent
-frontend/   React (Vite) storefront and dashboard
-```
+Why Resync?
 
-## Running locally
+Razorpay's API can tell a merchant that a payment exists.
 
-### Backend
+Resync addresses the harder case where the merchant's own database has lost the transaction state.
 
-```bash
+It combines:
+
+Razorpay payment state
+        +
+Merchant-side WAL evidence
+        =
+Recoverable merchant state
+
+Resync does not replace Razorpay reconciliation. It provides the missing execution evidence needed for crash recovery.
+
+Demo
+
+The "/wal-sidecar" dashboard demonstrates a crash scenario where:
+
+- A Razorpay payment succeeds.
+- The merchant database receives no order.
+- The WAL still contains the execution evidence.
+- The healing agent detects and evaluates the orphaned payment.
+- The missing MongoDB order is reconstructed when the safety checks pass.
+
+Tech Stack
+
+- Backend: FastAPI, Python
+- Database: MongoDB
+- WAL: SQLite
+- AI: Groq ("openai/gpt-oss-120b")
+- Payments: Razorpay
+- Frontend: React, Vite
+
+Repository
+
+backend/    FastAPI, Razorpay, WAL, healing agent
+frontend/   React storefront and recovery dashboard
+
+Run Locally
+
+Backend
+
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # Razorpay test keys, Groq key, Mongo URI
+cp .env.example .env
 uvicorn main:app --reload --port 9000
-```
 
-Requires a MongoDB instance reachable at `MONGODB_URI` (local `mongod` or
-MongoDB Atlas).
+Configure Razorpay test keys, Groq API key, and "MONGODB_URI" in ".env".
 
-### Frontend
+Frontend
 
-```bash
 cd frontend
 npm install
 cp .env.example .env
 npm run dev
-```
-
-`/` is the storefront. `/wal-sidecar` is the dashboard: a button to
-simulate a mid-flight crash with zero database footprint, and a button to
-run the healing agent against the resulting orphaned payment.
-
-## Environment variables
-
-See [`backend/.env.example`](backend/.env.example).
