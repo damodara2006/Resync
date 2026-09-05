@@ -178,8 +178,14 @@ async def proxy(full_path: str, request: Request) -> Response:
 
     # --- Now relay the request on to the real Razorpay API. ---
     upstream_url = f"{RAZORPAY_UPSTREAM}{request_path}"
+    # Strip whitespace from header values -- some client libraries (e.g. the
+    # Razorpay Python SDK's User-Agent) emit trailing whitespace that
+    # `requests` tolerates but httpx rejects outright as an illegal header
+    # value, crashing the relay before it ever reaches Razorpay.
     forward_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")
+        k: v.strip()
+        for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length")
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
