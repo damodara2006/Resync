@@ -20,7 +20,20 @@ from config import get_settings
 @lru_cache
 def get_razorpay_client() -> razorpay.Client:
     settings = get_settings()
-    client = razorpay.Client(auth=(settings.razorpay_key_id, settings.razorpay_key_secret))
+    client_options: dict[str, Any] = {}
+
+    # Optional: route all Razorpay API calls through the local WAL sidecar
+    # (backend/sidecar/) instead of hitting Razorpay directly. The sidecar
+    # transparently relays every request/response, so this has no effect
+    # on behavior -- it only adds an independent, durable local record that
+    # survives even if this backend process crashes mid-request. Disabled
+    # by default; opt in by setting WAL_SIDECAR_URL (e.g. http://localhost:9000).
+    if settings.wal_sidecar_url:
+        client_options["base_url"] = settings.wal_sidecar_url
+
+    client = razorpay.Client(
+        auth=(settings.razorpay_key_id, settings.razorpay_key_secret), **client_options
+    )
     return client
 
 

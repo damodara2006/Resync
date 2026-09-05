@@ -2,6 +2,7 @@
 Centralized application settings, loaded from environment variables / .env.
 """
 from functools import lru_cache
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +13,11 @@ class Settings(BaseSettings):
     # Razorpay
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
+
+    # WAL Sidecar (optional). When set, all Razorpay API calls from this
+    # backend are routed through the sidecar process instead of directly
+    # to Razorpay -- see backend/sidecar/main.py and services/razorpay_client.py.
+    wal_sidecar_url: Optional[str] = None
 
     # Groq
     groq_api_key: str = ""
