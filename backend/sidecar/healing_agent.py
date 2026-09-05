@@ -38,6 +38,7 @@ in implementation):
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Optional, TypedDict
 from uuid import uuid4
@@ -211,6 +212,42 @@ async def scan_wal_for_orphans() -> list[HealingState]:
 # Node 2: groq_identity_check
 # --------------------------------------------------------------------------
 
+_RELEVANT_PAYMENT_FIELDS = (
+    "id",
+    "order_id",
+    "amount",
+    "currency",
+    "status",
+    "captured",
+    "email",
+    "contact",
+    "notes",
+    "created_at",
+)
+
+
+def _trim_payload_for_groq(raw_payload_json: str) -> str:
+    """Strip a raw Razorpay JSON body down to only the fields relevant to
+    the identity check, before it ever reaches the LLM.
+
+    The full payment object includes card metadata, bank/acquirer details,
+    and (for failed attempts) verbose error fields -- none of which the
+    identity check needs, and which in practice made the tool-calling
+    schema unreliable on some Groq models (large, noisy inputs increased
+    the odds of a malformed structured-output response).
+    """
+    try:
+        payload = json.loads(raw_payload_json)
+    except (TypeError, ValueError):
+        return raw_payload_json
+
+    if not isinstance(payload, dict):
+        return raw_payload_json
+
+    trimmed = {k: payload[k] for k in _RELEVANT_PAYMENT_FIELDS if k in payload}
+    return json.dumps(trimmed)
+
+
 async def groq_identity_check_node(state: HealingState) -> HealingState:
     request_entry = state.get("wal_request_entry")
     response_entry = state.get("wal_response_entry")
@@ -226,8 +263,12 @@ async def groq_identity_check_node(state: HealingState) -> HealingState:
     try:
         result: WalIdentityCheckResult = await chain.ainvoke(
             {
-                "request_payload": (request_entry or {}).get("raw_payload", "{}"),
-                "response_payload": response_entry.get("raw_payload", "{}"),
+                "request_payload": _trim_payload_for_groq(
+                    (request_entry or {}).get("raw_payload", "{}")
+                ),
+                "response_payload": _trim_payload_for_groq(
+                    response_entry.get("raw_payload", "{}")
+                ),
             }
         )
     except Exception as exc:  # Groq tool-call/schema failures, rate limits, etc.
