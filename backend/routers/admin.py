@@ -43,7 +43,19 @@ async def get_desyncs() -> list[DesyncOrderView]:
 
 @router.get("/audit-logs", response_model=list[AuditLog])
 async def get_audit_logs() -> list[AuditLog]:
-    cursor = audit_logs_collection().find({}).sort("timestamp", -1)
+    # Approach A (this reconciliation agent) and Approach B (the WAL
+    # sidecar, backend/sidecar/) are independent solutions that happen to
+    # share the same `audit_logs` collection. The sidecar tags its own
+    # entries with source="wal_sidecar" and uses a different action_taken
+    # vocabulary (e.g. "AUTO_FULFILL_VIA_WAL"), which doesn't fit this
+    # endpoint's strict ActionTaken enum -- so exclude those here and let
+    # the WAL Sidecar page read its own entries via the sidecar's own
+    # GET /wal/audit-logs instead.
+    cursor = (
+        audit_logs_collection()
+        .find({"source": {"$ne": "wal_sidecar"}})
+        .sort("timestamp", -1)
+    )
     docs = await cursor.to_list(length=500)
     return [AuditLog(**doc) for doc in docs]
 
@@ -55,10 +67,10 @@ async def get_metrics() -> AdminMetrics:
         {"status": {"$in": [OrderStatus.DESYNCHRONIZED.value, OrderStatus.PENDING.value]}}
     )
     auto_healed = await audit_logs_collection().count_documents(
-        {"action_taken": ActionTaken.AUTO_FULFILL.value}
+        {"action_taken": ActionTaken.AUTO_FULFILL.value, "source": {"$ne": "wal_sidecar"}}
     )
     escalated = await audit_logs_collection().count_documents(
-        {"action_taken": ActionTaken.HUMAN_ESCALATION.value}
+        {"action_taken": ActionTaken.HUMAN_ESCALATION.value, "source": {"$ne": "wal_sidecar"}}
     )
     return AdminMetrics(
         total_scanned=total_scanned,
