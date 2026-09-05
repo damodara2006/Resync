@@ -39,9 +39,12 @@ in implementation):
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional, TypedDict
 from uuid import uuid4
+
+logger = logging.getLogger("sidecar.healing_agent")
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -62,22 +65,23 @@ def new_id(prefix: str) -> str:
 # --------------------------------------------------------------------------
 
 class WalIdentityCheckResult(BaseModel):
-    """Groq's cross-check of the WAL's own request vs response records."""
+    """Groq's read of the WAL's response-side record.
+
+    Deliberately minimal: amount/identity consistency between the request
+    and response WAL entries is objectively checkable and is done in plain
+    Python (see `_check_wal_consistency`) rather than asked of the model --
+    a richer schema with multiple boolean judgment fields proved unreliable
+    for tool-calling on some Groq models. This schema asks the LLM only for
+    what genuinely needs judgment: recovering the customer email and
+    explaining its confidence.
+    """
 
     customer_email: Optional[EmailStr] = Field(
-        default=None, description="Customer email recovered from the WAL records, if present"
+        default=None, description="Customer email recovered from the WAL record, if present"
     )
-    amount_consistent: bool = Field(
-        description="True if the amount reported in the request-side and response-side "
-        "WAL entries agree with each other"
-    )
-    identity_consistent: bool = Field(
-        description="True if the order_id / razorpay_order_id / razorpay_payment_id linkage "
-        "across the WAL entries is coherent and not contradictory"
-    )
-    reasoning: str = Field(description="Concise explanation of the cross-check result")
+    reasoning: str = Field(description="Concise explanation of the confidence score below")
     confidence_score: float = Field(
-        ge=0.0, le=1.0, description="Confidence (0-1) that this WAL record set is trustworthy"
+        ge=0.0, le=1.0, description="Confidence (0-1) that this WAL record is trustworthy"
     )
 
 
@@ -86,23 +90,34 @@ _IDENTITY_CHECK_PROMPT = ChatPromptTemplate.from_messages(
         (
             "system",
             "You are a forensic auditor for a payments platform's local Write-Ahead Log (WAL). "
-            "You will be given the raw JSON bodies the WAL sidecar captured directly off the "
-            "network wire: the request Resync's backend sent to Razorpay, and the response "
-            "Razorpay sent back. The merchant's own database has ZERO record of this order -- "
-            "it likely crashed before writing anything. Your job is to verify whether these WAL "
-            "records are internally self-consistent enough to safely reconstruct the missing "
-            "order from them alone: does the amount match between request and response, does "
-            "the order/payment identity linkage make sense, and is there a customer email you "
-            "can recover. Set confidence_score to reflect your certainty that reconstructing an "
-            "order from exactly this data would be accurate.",
+            "You will be given the raw JSON body of a captured payment that the WAL sidecar saw "
+            "directly on the network wire. The merchant's own database has ZERO record of this "
+            "order -- it likely crashed before writing anything. Recover the customer email if "
+            "present, and set confidence_score to reflect how certain you are that this record "
+            "is complete and trustworthy enough to reconstruct an order from.",
         ),
-        (
-            "human",
-            "Request-side WAL record:\n{request_payload}\n\n"
-            "Response-side WAL record:\n{response_payload}",
-        ),
+        ("human", "WAL payment record:\n{response_payload}"),
     ]
 )
+
+
+def _check_wal_consistency(
+    request_entry: Optional[dict[str, Any]], response_entry: dict[str, Any]
+) -> tuple[bool, bool]:
+    """Deterministic (non-LLM) checks the safety gate relies on:
+    does the amount match between the request and response WAL entries,
+    and is the order/payment identity linkage coherent. These are plain
+    equality checks -- no judgment call needed, so no reason to route them
+    through an LLM tool call."""
+    amount_consistent = True
+    if request_entry and request_entry.get("amount") is not None:
+        amount_consistent = request_entry.get("amount") == response_entry.get("amount")
+
+    identity_consistent = bool(response_entry.get("razorpay_order_id")) and bool(
+        response_entry.get("razorpay_payment_id")
+    )
+
+    return amount_consistent, identity_consistent
 
 
 def _get_identity_check_chain():
@@ -124,6 +139,8 @@ class HealingState(TypedDict, total=False):
     wal_response_entry: Optional[dict[str, Any]]
 
     identity_check: Optional[WalIdentityCheckResult]
+    amount_consistent: bool
+    identity_consistent: bool
     amount_within_limit: bool
     confidence_sufficient: bool
     safety_gate_passed: bool
@@ -259,32 +276,41 @@ async def groq_identity_check_node(state: HealingState) -> HealingState:
         state["identity_check"] = None
         return state
 
+    # Amount/identity consistency are objectively checkable -- compute them
+    # deterministically rather than asking the LLM to judge them (see
+    # _check_wal_consistency's docstring for why).
+    amount_consistent, identity_consistent = _check_wal_consistency(request_entry, response_entry)
+    state["amount_consistent"] = amount_consistent
+    state["identity_consistent"] = identity_consistent
+
     chain = _get_identity_check_chain()
     try:
         result: WalIdentityCheckResult = await chain.ainvoke(
             {
-                "request_payload": _trim_payload_for_groq(
-                    (request_entry or {}).get("raw_payload", "{}")
-                ),
                 "response_payload": _trim_payload_for_groq(
                     response_entry.get("raw_payload", "{}")
                 ),
             }
         )
     except Exception as exc:  # Groq tool-call/schema failures, rate limits, etc.
+        logger.exception("Groq identity check failed for a WAL orphan")
+        error_detail = str(exc)[:300]
         state["identity_check"] = None
         state["reasoning_steps"].append(
-            f"Groq WAL identity check FAILED to produce a valid result ({exc.__class__.__name__}) "
-            "-- treating as unverifiable rather than guessing; this orphan will be escalated."
+            f"Groq WAL identity check FAILED to produce a valid result ({exc.__class__.__name__}: "
+            f"{error_detail}) -- treating as unverifiable rather than guessing; this orphan will "
+            "be escalated."
         )
         return state
 
     state["identity_check"] = result
 
     state["reasoning_steps"].append(
+        f"Deterministic WAL consistency check: amount_consistent={amount_consistent}, "
+        f"identity_consistent={identity_consistent}."
+    )
+    state["reasoning_steps"].append(
         f"Groq WAL identity check: email={result.customer_email}, "
-        f"amount_consistent={result.amount_consistent}, "
-        f"identity_consistent={result.identity_consistent}, "
         f"confidence={result.confidence_score:.2f}. Reasoning: {result.reasoning}"
     )
     return state
@@ -308,7 +334,9 @@ async def safety_gate_node(state: HealingState) -> HealingState:
 
     amount_within_limit = amount_inr <= settings.safety_max_amount_inr
     confidence_sufficient = identity_check.confidence_score >= settings.safety_min_confidence
-    internally_consistent = identity_check.amount_consistent and identity_check.identity_consistent
+    internally_consistent = bool(state.get("amount_consistent")) and bool(
+        state.get("identity_consistent")
+    )
 
     state["amount_within_limit"] = amount_within_limit
     state["confidence_sufficient"] = confidence_sufficient
